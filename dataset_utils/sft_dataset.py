@@ -245,9 +245,38 @@ class SFTDataset(Dataset):
                             )
                         }
                     ]
+            elif scene_data['dataset_name'] in ("hugsim_teacher", "alpasim_teacher"):
+                # Claude-teacher rollouts distilled from a closed-loop simulator (student-driver's
+                # autovla_client/make_teacher_sft_data.py). `cot_output` is the teacher's own
+                # one-sentence reason, already stripped of anything the student cannot see, so it
+                # goes straight into <think>. A row without one is a plain direct-decision answer,
+                # which is the same shape nuPlan uses when it has no CoT -- keeping the two forms
+                # identical matters, because mixing a reasoned and an unreasoned answer under an
+                # identical prompt is what teaches a model to emit prose on some frames and not
+                # others.
+                has_cot = isinstance(gt_cot, str) and gt_cot.strip() != ""
+                think = (f"This is a complex scenario requiring additional reasoning.\n{gt_cot.strip()}"
+                         if has_cot else
+                         "This is a straightforward scenario, and a direct decision can be made.")
+                assistant_content = [
+                    {
+                        "type": "text",
+                        "text": (
+                            "<think>\n"
+                            f"{think}\n"
+                            "</think>\n"
+                            "<answer>\n"
+                            "The final output action is: " + self.action_tokenizer(gt_action_idx[0]) + "\n"
+                            "</answer>"
+                        )
+                    }
+                ]
             else:
-                print(scene_data['dataset_name'])
-                exit()
+                raise ValueError(
+                    f"SFTDataset has no branch for dataset_name={scene_data['dataset_name']!r} "
+                    f"(scene {scene_path}). Known: nuplan, waymo, nuscenes, hugsim_teacher, "
+                    f"alpasim_teacher."
+                )
 
 
         user_content = [

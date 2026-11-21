@@ -72,9 +72,24 @@ if __name__ == "__main__":
     model = SFTAutoVLA(config)
     model.autovla.vlm.model.gradient_checkpointing_enable() # enable gradient checkpointing to save memory
 
-    # checkpoint_path = Path(".ckpt")
-    # state_dict = torch.load(checkpoint_path)['state_dict']
-    # model.load_state_dict(state_dict)
+    # Continue from a released or previous AutoVLA checkpoint instead of base Qwen + fresh action
+    # embeddings. Without this the run is not a fine-tune of AutoVLA at all -- it relearns driving
+    # from scratch on whatever the dataset holds.
+    init_ckpt = config['model'].get('init_from_checkpoint')
+    if init_ckpt:
+        print(f"init_from_checkpoint: {init_ckpt}")
+        state_dict = torch.load(init_ckpt, map_location="cpu")["state_dict"]
+        missing, unexpected = model.load_state_dict(state_dict, strict=False)
+        matched = len(state_dict) - len(unexpected)
+        print(f"  matched {matched}/{len(state_dict)} tensors "
+              f"({len(missing)} missing, {len(unexpected)} unexpected)")
+        # strict=False turns a total key mismatch into a silent no-op, which looks exactly like a
+        # successful load until the eval numbers come back at chance.
+        if matched < 0.9 * len(state_dict):
+            raise ValueError(
+                f"only {matched} of {len(state_dict)} checkpoint tensors matched the model; "
+                f"first unexpected: {unexpected[:3]}, first missing: {missing[:3]}"
+            )
     
     # Create data collator with config parameters
     data_collator = DataCollator(
