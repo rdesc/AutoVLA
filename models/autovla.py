@@ -354,10 +354,17 @@ class SFTAutoVLA(pl.LightningModule):
         if action_loss.numel() > 0:
             action_loss = action_loss.mean()
 
-        # # add more penalty for CoT reasoning data
+        # Upweight the rows that carry reasoning. Upstream hardcodes 40, which suits a mix where CoT
+        # rows are scarce (nuPlan/nuScenes only have them for complex scenarios) and would otherwise
+        # be drowned out. On a set that is mostly CoT the same factor inverts the intent: the
+        # non-reasoning rows stop contributing, the more so because gradient_clip_val=1.0 clips by
+        # VALUE, so a 40x loss saturates the clip and every CoT step takes a uniform-size step while
+        # the direct ones take a much smaller one. Configurable, defaulting to upstream's 40.
+        # NOTE hascot[0] reads only the first row of the batch -- correct at batch_size 1, which is
+        # what every config here uses, but wrong for any larger batch.
+        cot_scale = self.cfg['training'].get('cot_loss_scale', 40)
         if hascot[0] == True:
-            # print("add more penalty for CoT reasoning data")
-            loss = loss * 40
+            loss = loss * cot_scale
             loss = loss + action_loss
 
         self.log("train_loss", loss.item(),

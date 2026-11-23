@@ -42,6 +42,12 @@ training:
   lr_step_gamma: 0.98
   train_sample_size: null
   accumulate_grad_batches: 4
+  # Upstream multiplies a reasoning row's loss by 40 so scarce CoT data is not drowned out. Here 75%
+  # of rows carry reasoning (medium/hard/extreme) and 25% do not (easy), so that factor would do the
+  # opposite of its purpose: with gradient_clip_val=1.0 clipping by value, every CoT step saturates
+  # the clip and the easy rows -- the whole point of gating reasoning on difficulty -- barely train.
+  # 1.0 treats both kinds equally. Set it back to 40 to reproduce upstream's weighting.
+  cot_loss_scale: 1.0
 
 data:
   train:

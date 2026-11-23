@@ -19,3 +19,8 @@
 
 # temp
 temp/*
+
+# machine-local: dataset/ is a symlink to ephemeral NVMe, outputs/ is hydra run output
+/dataset/
+/outputs/
+runs/
