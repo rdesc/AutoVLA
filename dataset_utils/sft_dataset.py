@@ -245,7 +245,7 @@ class SFTDataset(Dataset):
                             )
                         }
                     ]
-            elif scene_data['dataset_name'] in ("hugsim_teacher", "alpasim_teacher"):
+            elif scene_data['dataset_name'] in ("hugsim_teacher", "alpasim_teacher", "hugsim_oracle"):
                 # Claude-teacher rollouts distilled from a closed-loop simulator (student-driver's
                 # autovla_client/make_teacher_sft_data.py). `cot_output` is the teacher's own
                 # one-sentence reason, already stripped of anything the student cannot see, so it
@@ -275,7 +275,7 @@ class SFTDataset(Dataset):
                 raise ValueError(
                     f"SFTDataset has no branch for dataset_name={scene_data['dataset_name']!r} "
                     f"(scene {scene_path}). Known: nuplan, waymo, nuscenes, hugsim_teacher, "
-                    f"alpasim_teacher."
+                    f"alpasim_teacher, hugsim_oracle."
                 )
 
 
