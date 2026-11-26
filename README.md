@@ -26,6 +26,15 @@ University of California, Los Angeles | <sup>*</sup> Equal contribution, <sup>�
 - 🪜 **Reinforcement fine-tuning (RFT)** based on Group Relative Policy Optimization (GRPO) is adopted to enhance planning performance and runtime efficiency, reducing unnecessary reasoning in straightforward scenarios.
 - 🔥 Extensive experiments across real-world and simulated datasets and benchmarks, including **nuPlan**, **nuScenes**, **Waymo**, and **CARLA**, demonstrate its competitive performance in both open-loop and closed-loop settings.
 
+## Fork notes
+
+This fork adds HUGSIM / Alpasim simulator distillation on top of upstream AutoVLA.
+**[`docs/FINETUNING_FINDINGS.md`](docs/FINETUNING_FINDINGS.md)** records what we measured while
+fine-tuning `AutoVLA_PDMS_89` on simulator rollouts: the optimiser it actually wants (and why
+matching a comparison model's hyperparameters costs 7-10 points), the action codebook's hard speed
+ceiling and the output-format collapse that follows from it, the +-2.4 point noise floor on the
+HUGSIM 155, and two bugs in the training path. Read it before running or interpreting an SFT arm.
+
 ## News
 
 - **`2026/05`**: [AutoVLA checkpoint](https://huggingface.co/Zewei-Zhou/AutoVLA) is now released.
