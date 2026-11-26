@@ -1,0 +1,87 @@
+name: qwen2.5-vl-3B-hugsim-teacher-b32
+description: >
+  The Claude-teacher arm (with reasoning) on 8 GPUs at accumulate_grad_batches 4 -- i.e. the
+  PUBLISHED CONFIG RUN UNCHANGED on the hardware we now have, which gives an effective batch of 32
+  rather than the 24 it gave on six GPUs.
+
+  This is the open question between the two settings we have measured. Effective batch is the knob
+  AutoVLA is most sensitive to: 24 scores 38.6 / 41.0 and 128 scores 31.5, a 7-10 point drop, and
+  the mechanism looks like step count (1435 steps at 24, 269 at 128). 32 gives 1076 steps, so if
+  the relationship is monotone in steps this should land just under the batch-24 arms; if it is
+  flat up to some threshold it should match them. Either answer is worth having, because it decides
+  whether "run the config as written on 8 GPUs" is a safe default for every future arm.
+
+  Read against teacher-8gpu (batch 24, same data, same 8 GPUs) and mind the +-2.4 point
+  shuffle-sharding noise floor -- this arm has to differ by more than that to mean anything.
+
+model:
+  use_cot: true
+  pretrained_model_path: /opt/dlami/nvme/rod/ckpts/autovla/Qwen2.5-VL-3B-Instruct
+  # Continue from the released checkpoint rather than base Qwen: this is a fine-tune of AutoVLA,
+  # not a retrain. run_sft.py fails loudly if the tensors do not match.
+  init_from_checkpoint: /mnt/efs/users/rod/ckpts/AutoVLA/AutoVLA_PDMS_89.ckpt
+  train_vision_backbone: false
+  train_lm_backbone: true
+  codebook_cache_path: "codebook_cache/agent_vocab.pkl"
+  trajectory:
+    num_poses: 10
+    interval_length: 0.5
+    time_horizon: 5.0
+  tokens:
+    action_start_id: 151665
+    ignore_index: -100
+    assistant_id: [151644, 77091]
+  video:
+    # 100352 == 28*28*128, which is what dataset_utils/sft_dataset.py actually used while these
+    # arms trained: it hardcoded the value and ignored this key. Pinned explicitly now that the
+    # code reads it, so every published arm stays reproducible. The EVAL driver uses 109760, so
+    # this is a real train/test mismatch -- see docs/FINETUNING_FINDINGS.md and the -px109760 arm.
+    min_pixels: 100352
+    max_pixels: 100352
+
+training:
+  batch_size: 1
+  learning_rate: 2.0e-5
+  # One epoch, as every ReCogDrive arm is, so the two students' runs are read the same way.
+  epochs: 1
+  num_workers: 4
+  weight_decay: 0.01
+  # The stock config warms up over 500 steps, which on 36.5k rows at an effective batch of 24 is a
+  # third of the whole run. 100 is ~7%, which is the usual shape for a fine-tune off a trained
+  # checkpoint rather than a cold start.
+  lr_warmup_step: 100
+  lr_step_frequency: 2000
+  lr_step_gamma: 0.98
+  train_sample_size: null
+  # 8 GPUs x 1 x 4 = 32 -- the published config's own value, unchanged. 36,476 examples / 32 =
+  # 1076 optimizer steps, against 1435 at batch 24 and 269 at batch 128.
+  accumulate_grad_batches: 4
+  val_check_interval: 0.25
+  save_top_k: -1
+  checkpoint_every_n_epochs: null
+  # Upstream multiplies a reasoning row's loss by 40 so scarce CoT data is not drowned out. Here 75%
+  # of rows carry reasoning (medium/hard/extreme) and 25% do not (easy), so that factor would do the
+  # opposite of its purpose: with gradient_clip_val=1.0 clipping by value, every CoT step saturates
+  # the clip and the easy rows -- the whole point of gating reasoning on difficulty -- barely train.
+  # 1.0 treats both kinds equally. Set it back to 40 to reproduce upstream's weighting.
+  cot_loss_scale: 1.0
+
+data:
+  train:
+    json_dataset_path:
+      - /mnt/efs/users/rod/student_runs/sft_data/autovla_hugsim_final-rewind_executed5s_train
+    sensor_data_path:
+      - null
+  val:
+    # Held out BY SCENARIO (split_train_val.py); a row split would share frames across the halves.
+    json_dataset_path: /mnt/efs/users/rod/student_runs/sft_data/autovla_hugsim_final-rewind_executed5s_val
+    sensor_data_path: null
+
+inference:
+  batch_size: 1
+  num_workers: 2
+  sample:
+    max_length: 2048
+    temperature: 0.01
+    top_k: 0
+    top_p: 1.0
