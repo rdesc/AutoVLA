@@ -16,6 +16,14 @@ IGNORE_INDEX = -100
 
 class SFTDataset(Dataset):
     def __init__(self, data_config, model_config, processor, using_cot=True):
+        # The video resolution the prompt is built at. This was hardcoded to 28*28*128 == 100352 in
+        # all three prompt branches below while model.video.{min,max}_pixels said 109760 and was
+        # ignored -- so training and the eval driver (which uses 109760) fed different resolutions.
+        # Reading it here makes the key mean what it says; existing configs are pinned to 100352 so
+        # their arms stay reproducible.
+        _video = (model_config or {}).get('video', {}) or {}
+        self._min_pixels = _video.get('min_pixels', 28 * 28 * 128)
+        self._max_pixels = _video.get('max_pixels', 28 * 28 * 128)
         data_paths = data_config['json_dataset_path']
         sensor_data_paths = data_config['sensor_data_path']
 
@@ -292,8 +300,8 @@ class SFTDataset(Dataset):
             },
             {
                 "type": "video",
-                "min_pixels": 28 * 28 * 128,
-                "max_pixels": 28 * 28 * 128,
+                "min_pixels": self._min_pixels,
+                "max_pixels": self._max_pixels,
                 "video": [
                     f"file://{front_camera_1}",
                     f"file://{front_camera_2}",
@@ -307,8 +315,8 @@ class SFTDataset(Dataset):
             },
             {
                 "type": "video",
-                "min_pixels": 28 * 28 * 128,
-                "max_pixels": 28 * 28 * 128,
+                "min_pixels": self._min_pixels,
+                "max_pixels": self._max_pixels,
                 "video": [
                     f"file://{front_left_camera_1}",
                     f"file://{front_left_camera_2}",
@@ -322,8 +330,8 @@ class SFTDataset(Dataset):
             },
             {
                 "type": "video",
-                "min_pixels": 28 * 28 * 128,
-                "max_pixels": 28 * 28 * 128,
+                "min_pixels": self._min_pixels,
+                "max_pixels": self._max_pixels,
                 "video": [
                     f"file://{front_right_camera_1}",
                     f"file://{front_right_camera_2}",

@@ -25,8 +25,12 @@ model:
     ignore_index: -100
     assistant_id: [151644, 77091]
   video:
-    min_pixels: 109760
-    max_pixels: 109760
+    # 100352 == 28*28*128, which is what dataset_utils/sft_dataset.py actually used while these
+    # arms trained: it hardcoded the value and ignored this key. Pinned explicitly now that the
+    # code reads it, so every published arm stays reproducible. The EVAL driver uses 109760, so
+    # this is a real train/test mismatch -- see docs/FINETUNING_FINDINGS.md and the -px109760 arm.
+    min_pixels: 100352
+    max_pixels: 100352
 
 data:
   train:
