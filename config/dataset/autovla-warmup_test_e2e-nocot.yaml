@@ -1,0 +1,22 @@
+name: autovla-warmup_test_e2e-nocot
+description: >
+  No-CoT preprocessing of the NAVSIM warmup_test_e2e split, to reproduce AutoVLA's
+  reported PDMS with the released checkpoint. Differs from
+  qwen2.5-vl-72B-nuplan only in the split (warmup_test_e2e, not warmup_test_e2e) and
+  in pointing pretrained_model_path at the 3B weights: nocot_sample_generation
+  uses the processor solely to build batches whose tokenised output it then
+  discards, writing camera paths and ego scalars, so the 72B AWQ processor is
+  not needed.
+
+# model (processor only -- no weights are run in the no-CoT path)
+pretrained_model_path: /opt/dlami/nvme/rod/cache/hf-models/Qwen2.5-VL-3B-Instruct
+
+# training
+batch_size: 1
+num_workers: 32
+
+# dataset: 'placeholder' is substituted with navsim_logs/ and sensor_blobs/
+# by NuplanCoTAnnotationDataset.__init__ (dataset_utils/preprocessing/nuplan_dataset.py:44-45)
+dataset_name: nuplan
+dataset_path: /mnt/efs/users/rod/repos/AutoVLA/dataset/nuplan/placeholder/test
+scene_filter: ./navsim/navsim/planning/script/config/common/train_test_split/scene_filter/warmup_test_e2e.yaml
