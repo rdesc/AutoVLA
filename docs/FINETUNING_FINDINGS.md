@@ -189,7 +189,50 @@ branches while the configs said 109760 and the eval driver used 109760. The key 
 > The lesson is worth more than the bug: **a config key that is read but never binding looks exactly
 > like a key that works.** Check what the processor actually emits, not what the config says.
 
-## 7. `cot_loss_scale`
+## 7. What the Alpasim sets are actually filtered on — and the one check nobody applied
+
+Easy to get wrong, because three different checks are involved and only two of them were applied.
+Our Alpasim arms are built with `--only-tokens`, which keeps exactly the 13,872 decisions in
+ReCogDrive's shipped `recogdrive/sft_filtered.jsonl`, so both students train on byte-identical
+decisions. That is the property that makes the cross-student comparison defensible, and it is why
+the builder bypasses its own filters on that path.
+
+What that list does and does not encode, measured against the export's `samples.jsonl` and its
+`recogdrive/stats.json` (2026-11-26):
+
+| check | what it catches | in their list? |
+|---|---|---|
+| `keep` | at-fault event, and the 3 s before it | **yes** — 0 of 13,872 violate it (`export_keep` 17,062) |
+| executed-path, i.e. DAC/NC | the executed 4 s goes off-road or collides | **yes** — 2,416 dropped (`executed_offroad` 411, `executed_collision` 2,005; `keep_and_executed_ok` 16,723) |
+| `wrong_lane` / `left_corridor` | the ego is in the wrong lane, or laterally outside its route corridor, **at that decision** | **NO** — 1,485 remain (10.7%): 815 wrong_lane, 853 left_corridor |
+
+The third is a different and softer signal from the second. A vehicle can sit outside its corridor
+for an entire rollout without its executed path ever going off-road or colliding, so those 1,485
+decisions pass the DAC/NC check cleanly and still demonstrate bad lane discipline.
+
+**Why this matters.** The unexplained part of the Alpasim result is specifically that every
+fine-tuned arm roughly doubles LATERAL corridor exits — `left_corridor_laterally` 9.8% → 17–20% —
+while `offroad` actually improves (26.8% → ~20%) and progress rises (0.513 → 0.618). That pattern
+matches the one check nobody applied and not the ones everybody did.
+
+**Why it is a lead and not a cause.** ReCogDrive trained on the same 1,485 decisions and its Alpasim
+arms improved (0.519 → 0.614). So bad-lane supervision is not sufficient on its own; at most it
+compounds a weakness AutoVLA already has. The HUGSIM builder applies the lane filter normally, which
+is consistent with HUGSIM arms never showing this failure.
+
+**If you test it**, do it as an ablation and keep the matched arm as the headline row. Filtering
+trades away the identical-decisions property, which is currently the strongest claim about these
+numbers. Sizing, for the cheapest candidate — `texecnr-m`, the worst arm and no-reasoning, so a
+20-minute eval rather than 56:
+
+    texecnr-m   13,025 examples -> 1,295 bad-lane (9.9%) -> 11,730 after filtering
+    texec-m     13,000 examples -> 1,292 bad-lane (9.9%) -> 11,708 after filtering
+
+Note the power limit before reading any result: 9.9% is modest, and the run-to-run noise floor on
+the Alpasim scene score has never been measured (the ±2.4 in §1 is HUGSIM `All*`). A move of ~0.02
+would not be distinguishable from noise.
+
+## 8. `cot_loss_scale`
 
 Upstream multiplies a reasoning row's loss by 40 so that scarce CoT data is not drowned out.
 In our difficulty-gated sets ~75% of training examples carry reasoning, so that factor does the opposite of
@@ -197,7 +240,7 @@ its purpose: with `gradient_clip_val=1.0` clipping **by value**, every CoT step 
 clip and the easy examples — the whole point of gating reasoning on difficulty — barely train.
 All our configs set `cot_loss_scale: 1.0`. Set it back to 40 only to reproduce upstream.
 
-## 8. Practical notes
+## 9. Practical notes
 
 - `scripts/run_autovla_hugsim.sh` runs the **sweep only — it does not score**. Scoring is
   `simulators/hugsim_garage/score_realized.py` then `scripts/mila/paper_table_row.py`. A chain
