@@ -1,3 +1,4 @@
+import math
 import torch
 import os
 from tqdm import tqdm
@@ -411,19 +412,44 @@ class SFTAutoVLA(pl.LightningModule):
         lr_warmpup_step = self.cfg['training']['lr_warmup_step']
         lr_step_freq = self.cfg['training']['lr_step_frequency']
         lr_step_gamma = self.cfg['training']['lr_step_gamma']
+        # Opt-in cosine, for runs that want to match a recipe specified that way (ReCogDrive's
+        # students are 10% warmup then cosine). Default stays the upstream step decay, so no other
+        # config changes behaviour. NOTE the step-decay default is usually a no-op here:
+        # lr_step_frequency is 2000 and these runs are a few hundred steps, so `gamma ** 0 == 1`
+        # and the LR is constant after warmup -- worth knowing before reading any run as "decayed".
+        lr_schedule = self.cfg['training'].get('lr_schedule', 'step')
+        total_steps = int(getattr(self.trainer, 'estimated_stepping_batches', 0) or 0)
+        print(f"[lr] schedule={lr_schedule} total_steps={total_steps} warmup={lr_warmpup_step} "
+              f"peak_lr={self.cfg['training']['learning_rate']}")
+        if lr_schedule == 'cosine' and total_steps <= lr_warmpup_step:
+            raise ValueError(
+                f"cosine needs total_steps > warmup: got {total_steps} steps, "
+                f"warmup {lr_warmpup_step}"
+            )
 
         def lr_update(step, warmup_step, step_size, gamma):
             if step < warmup_step:
                 # warm up lr
                 lr_scale = 1 - (warmup_step - step) / warmup_step * 0.95
+            elif lr_schedule == 'cosine':
+                # anneal over the REMAINING steps of the whole run; this is a function of the total,
+                # so a checkpoint partway through a 3-epoch cosine is NOT a 1-epoch cosine run
+                progress = (step - warmup_step) / max(1, total_steps - warmup_step)
+                lr_scale = 0.5 * (1.0 + math.cos(math.pi * min(1.0, progress)))
             else:
                 n = (step - warmup_step) // step_size
                 lr_scale = gamma ** n
 
-            if lr_scale < 1e-2:
+            # The 1e-2 floor exists so the STEP decay cannot anneal itself to a standstill over a
+            # long run. A cosine is supposed to end at zero -- ReCogDrive's own schedule logs a
+            # final LR of exactly 0.0 -- and the floor would instead pin the last ~6% of steps at
+            # 1% of peak, so it does not apply on that branch.
+            if lr_scale < 1e-2 and lr_schedule != 'cosine':
                 lr_scale = 1e-2
             elif lr_scale > 1:
                 lr_scale = 1
+            elif lr_scale < 0:
+                lr_scale = 0
 
             return lr_scale
         

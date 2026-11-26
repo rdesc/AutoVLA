@@ -1,0 +1,90 @@
+name: qwen2.5-vl-3B-hugsim-teacher-3ep-flat
+description: >
+  AutoVLA_PDMS_89 fine-tuned on the HUGSIM Claude-teacher rollouts (final-rewind, executed 5 s
+  targets, 36.5k decisions over 200 scenarios of the by-scene dev half). Reasoning is per
+  difficulty: medium/hard/extreme carry the teacher's reason into <think>, easy trains the
+  direct-decision form. Built by student-driver
+  simulators/hugsim_garage/agents/autovla_client/make_teacher_sft_data.py.
+
+  THIS IS THE CONVERGENCE RUN. Identical optimiser to the 1-epoch arm that scored All* 38.6 --
+  effective batch 24, lr 2e-5, warmup 100 -- extended to 3 epochs and validated every 0.25 epoch,
+  keeping every checkpoint. The LR is held FLAT on purpose: with a cosine, "epoch 2 beats epoch 1"
+  would conflate more training with a lower learning rate, and the end-of-run flattening is
+  guaranteed by construction rather than evidence of anything. Flat means each checkpoint is an
+  honest "more training" point, and the end-of-epoch-1 checkpoint should reproduce the 38.6 arm.
+  Evaluating epochs 1/2/3 on HUGSIM 155 gives score-vs-training-steps, which is the actual
+  convergence evidence -- val loss alone cannot settle it (the rcdmatch arm's val loss flattened
+  and still scored 31.5 against the 38.6 arm's 0.9173 / 38.6).
+
+model:
+  use_cot: true
+  pretrained_model_path: /opt/dlami/nvme/rod/ckpts/autovla/Qwen2.5-VL-3B-Instruct
+  # Continue from the released checkpoint rather than base Qwen: this is a fine-tune of AutoVLA,
+  # not a retrain. run_sft.py fails loudly if the tensors do not match.
+  init_from_checkpoint: /mnt/efs/users/rod/ckpts/AutoVLA/AutoVLA_PDMS_89.ckpt
+  train_vision_backbone: false
+  train_lm_backbone: true
+  codebook_cache_path: "codebook_cache/agent_vocab.pkl"
+  trajectory:
+    num_poses: 10
+    interval_length: 0.5
+    time_horizon: 5.0
+  tokens:
+    action_start_id: 151665
+    ignore_index: -100
+    assistant_id: [151644, 77091]
+  video:
+    min_pixels: 109760
+    max_pixels: 109760
+
+training:
+  batch_size: 1
+  learning_rate: 2.0e-5
+  # Three, to see whether 1 was enough. Epoch 1 is the replica of the published arm.
+  epochs: 3
+  num_workers: 4
+  weight_decay: 0.01
+  # The stock config warms up over 500 steps, which on 36.5k rows at an effective batch of 24 is a
+  # third of the whole run. 100 is ~7%, which is the usual shape for a fine-tune off a trained
+  # checkpoint rather than a cold start.
+  lr_warmup_step: 100
+  # FLAT, deliberately. At 2000 the decay never fired in the 1-epoch arm's 1435 steps, but it WOULD
+  # fire twice in this run's 4306 (at 2100 and 4100, for 0.98 and 0.9604), putting a 2-4% LR step
+  # exactly where the epoch boundaries we want to compare are. A frequency past the run length keeps
+  # gamma ** 0 == 1 throughout, which is what the published arm actually trained at.
+  lr_step_frequency: 1000000
+  lr_step_gamma: 0.98
+  train_sample_size: null
+  # 8 GPUs x 1 x 3 = 24, the same effective batch the published arm ran at on 6 GPUs x 1 x 4.
+  # 34,447 rows / 24 = 1435 steps per epoch, 4306 over the run.
+  accumulate_grad_batches: 3
+  # 4 val points per epoch, 12 over the run; keep every one of them (12 x 7.6 G on EFS).
+  val_check_interval: 0.25
+  save_top_k: -1
+  checkpoint_every_n_epochs: null
+  # Upstream multiplies a reasoning row's loss by 40 so scarce CoT data is not drowned out. Here 75%
+  # of rows carry reasoning (medium/hard/extreme) and 25% do not (easy), so that factor would do the
+  # opposite of its purpose: with gradient_clip_val=1.0 clipping by value, every CoT step saturates
+  # the clip and the easy rows -- the whole point of gating reasoning on difficulty -- barely train.
+  # 1.0 treats both kinds equally. Set it back to 40 to reproduce upstream's weighting.
+  cot_loss_scale: 1.0
+
+data:
+  train:
+    json_dataset_path:
+      - /mnt/efs/users/rod/student_runs/sft_data/autovla_hugsim_final-rewind_executed5s_train
+    sensor_data_path:
+      - null
+  val:
+    # Held out BY SCENARIO (split_train_val.py); a row split would share frames across the halves.
+    json_dataset_path: /mnt/efs/users/rod/student_runs/sft_data/autovla_hugsim_final-rewind_executed5s_val
+    sensor_data_path: null
+
+inference:
+  batch_size: 1
+  num_workers: 2
+  sample:
+    max_length: 2048
+    temperature: 0.01
+    top_k: 0
+    top_p: 1.0

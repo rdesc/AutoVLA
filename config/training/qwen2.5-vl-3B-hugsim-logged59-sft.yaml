@@ -1,0 +1,70 @@
+name: qwen2.5-vl-3B-hugsim-logged59-sft
+description: >
+  Arm 3b. As arm 3, but on EXACTLY the 59 episodes ReCogDrive's logged arm trained on
+  (logged_solved59.zip from Drive -> logged_solved59_dev_scenarios.txt), so the two students' logged
+  rows are a true like-for-like. Our own replay solves 82 of the 265 dev scenarios at hdscore>=0.7
+  where theirs solved 59, so --min-hd could not reproduce their set; --episodes names it instead.
+  2308 decisions over 59 scenarios. Frames are our 3-camera re-render of those same episodes: the
+  shipped archive carries CAM_FRONT only, which AutoVLA cannot use.
+model:
+  use_cot: true
+  pretrained_model_path: /opt/dlami/nvme/rod/ckpts/autovla/Qwen2.5-VL-3B-Instruct
+  # Continue from the released checkpoint rather than base Qwen: this is a fine-tune of AutoVLA,
+  # not a retrain. run_sft.py fails loudly if the tensors do not match.
+  init_from_checkpoint: /mnt/efs/users/rod/ckpts/AutoVLA/AutoVLA_PDMS_89.ckpt
+  train_vision_backbone: false
+  train_lm_backbone: true
+  codebook_cache_path: "codebook_cache/agent_vocab.pkl"
+  trajectory:
+    num_poses: 10
+    interval_length: 0.5
+    time_horizon: 5.0
+  tokens:
+    action_start_id: 151665
+    ignore_index: -100
+    assistant_id: [151644, 77091]
+  video:
+    min_pixels: 109760
+    max_pixels: 109760
+
+training:
+  batch_size: 1
+  learning_rate: 2.0e-5
+  # One epoch, as every ReCogDrive arm is, so the two students' runs are read the same way.
+  epochs: 3
+  num_workers: 4
+  weight_decay: 0.01
+  # The stock config warms up over 500 steps, which on 36.5k rows at an effective batch of 24 is a
+  # third of the whole run. 100 is ~7%, which is the usual shape for a fine-tune off a trained
+  # checkpoint rather than a cold start.
+  lr_warmup_step: 20
+  lr_step_frequency: 2000
+  lr_step_gamma: 0.98
+  train_sample_size: null
+  accumulate_grad_batches: 4
+  # Upstream multiplies a reasoning row's loss by 40 so scarce CoT data is not drowned out. Here 75%
+  # of rows carry reasoning (medium/hard/extreme) and 25% do not (easy), so that factor would do the
+  # opposite of its purpose: with gradient_clip_val=1.0 clipping by value, every CoT step saturates
+  # the clip and the easy rows -- the whole point of gating reasoning on difficulty -- barely train.
+  # 1.0 treats both kinds equally. Set it back to 40 to reproduce upstream's weighting.
+  cot_loss_scale: 1.0
+
+data:
+  train:
+    json_dataset_path:
+      - /mnt/efs/users/rod/student_runs/sft_data/autovla_hugsim_logged_solved59_executed5s_train
+    sensor_data_path:
+      - null
+  val:
+    # Held out BY SCENARIO (split_train_val.py); a row split would share frames across the halves.
+    json_dataset_path: /mnt/efs/users/rod/student_runs/sft_data/autovla_hugsim_logged_solved59_executed5s_val
+    sensor_data_path: null
+
+inference:
+  batch_size: 1
+  num_workers: 2
+  sample:
+    max_length: 2048
+    temperature: 0.01
+    top_k: 0
+    top_p: 1.0

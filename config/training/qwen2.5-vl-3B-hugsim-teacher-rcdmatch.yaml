@@ -1,0 +1,88 @@
+name: qwen2.5-vl-3B-hugsim-teacher-rcdmatch
+description: >
+  The HUGSIM teacher arm (w/ reasoning, w/ rewind) under ReCogDrive's optimisation regime, matched
+  on all four knobs: 1 epoch, effective batch 128, lr 4e-5, 10% warmup then COSINE decay. The
+  original arm (All* 38.6) differed on every one of those -- effective batch 24, lr 2e-5, and a
+  step decay whose lr_step_frequency of 2000 never fires in a few hundred steps, i.e. constant LR.
+  Validation every 0.25 epoch gives 4 points inside the epoch; every checkpoint is kept.
+  Note cosine anneals over the TOTAL run, so this is only a 1-epoch recipe: the same schedule over
+  3 epochs would leave the epoch-1 checkpoint at ~75% of peak LR and would not be this run.
+model:
+  use_cot: true
+  pretrained_model_path: /opt/dlami/nvme/rod/ckpts/autovla/Qwen2.5-VL-3B-Instruct
+  # Continue from the released checkpoint rather than base Qwen: this is a fine-tune of AutoVLA,
+  # not a retrain. run_sft.py fails loudly if the tensors do not match.
+  init_from_checkpoint: /mnt/efs/users/rod/ckpts/AutoVLA/AutoVLA_PDMS_89.ckpt
+  train_vision_backbone: false
+  train_lm_backbone: true
+  codebook_cache_path: "codebook_cache/agent_vocab.pkl"
+  trajectory:
+    num_poses: 10
+    interval_length: 0.5
+    time_horizon: 5.0
+  tokens:
+    action_start_id: 151665
+    ignore_index: -100
+    assistant_id: [151644, 77091]
+  video:
+    min_pixels: 109760
+    max_pixels: 109760
+
+training:
+  batch_size: 1
+  # Recorded for ReCogDrive's ft_teacher_rewind, the arm that scored All* 50.9:
+  # official436/_meta_recogdrive_vlm_ft_teacher_rewind/vlm_checkpoint_overlay/provenance.json --
+  # 1 epoch, global_batch 128, lr 4e-5 cosine with 10% warmup, 316 steps, final LR exactly 0.
+  # Matching the optimiser as well as the data makes this a like-for-like against their 50.9,
+  # instead of differing in batch, LR and schedule as well as architecture.
+  learning_rate: 4.0e-5
+  # One epoch, as every ReCogDrive arm is, so the two students' runs are read the same way.
+  epochs: 1
+  num_workers: 4
+  weight_decay: 0.01
+  # 1 epoch of 34,447 rows at effective batch 128 = 269 steps; 10% warmup = 27. ReCogDrive's
+  # ft_teacher_rewind logs its LR peak at step 32 of 316, i.e. 10.1% -- the same shape.
+  lr_warmup_step: 27
+  # cosine after warmup, over the whole run (models/autovla.py lr_update). lr_step_frequency and
+  # lr_step_gamma below are then unused.
+  lr_schedule: cosine
+  # validate 4x per epoch -> 12 points over the run
+  val_check_interval: 0.25
+  # keep every checkpoint (12 x ~8 G); the point is the curve, not the best one
+  save_top_k: -1
+  checkpoint_every_n_epochs: null
+  lr_step_frequency: 2000
+  lr_step_gamma: 0.98
+  train_sample_size: null
+  # Effective batch = GPUs x batch_size x accumulate_grad_batches. On 8 GPUs, 16 gives 128 --
+  # ReCogDrive's global batch, so this run matches their OPTIMISATION regime and not just their
+  # data. The 1-epoch arm that scored All* 38.6 ran at an effective batch of 24 (6 GPUs x 1 x 4),
+  # i.e. a 5.3x smaller gradient estimate, which is most of why its loss curve is so ragged.
+  # Consequence: ~269 optimizer steps per epoch here against that run's 1435.
+  accumulate_grad_batches: 16
+  # Upstream multiplies a reasoning row's loss by 40 so scarce CoT data is not drowned out. Here 75%
+  # of rows carry reasoning (medium/hard/extreme) and 25% do not (easy), so that factor would do the
+  # opposite of its purpose: with gradient_clip_val=1.0 clipping by value, every CoT step saturates
+  # the clip and the easy rows -- the whole point of gating reasoning on difficulty -- barely train.
+  # 1.0 treats both kinds equally. Set it back to 40 to reproduce upstream's weighting.
+  cot_loss_scale: 1.0
+
+data:
+  train:
+    json_dataset_path:
+      - /mnt/efs/users/rod/student_runs/sft_data/autovla_hugsim_final-rewind_executed5s_train
+    sensor_data_path:
+      - null
+  val:
+    # Held out BY SCENARIO (split_train_val.py); a row split would share frames across the halves.
+    json_dataset_path: /mnt/efs/users/rod/student_runs/sft_data/autovla_hugsim_final-rewind_executed5s_val
+    sensor_data_path: null
+
+inference:
+  batch_size: 1
+  num_workers: 2
+  sample:
+    max_length: 2048
+    temperature: 0.01
+    top_k: 0
+    top_p: 1.0

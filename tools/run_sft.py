@@ -131,6 +131,9 @@ if __name__ == "__main__":
         accelerator="gpu",
         devices='auto',
         accumulate_grad_batches=config['training']['accumulate_grad_batches'],
+        # Validate mid-epoch when asked. Lightning's default only validates at the epoch boundary,
+        # so a 1-epoch run yields exactly ONE val_loss and no view of convergence at all.
+        val_check_interval=config['training'].get('val_check_interval', 1.0),
         strategy=FSDPStrategy(
             auto_wrap_policy=wrap_policy,
             cpu_offload=False,
@@ -152,12 +155,15 @@ if __name__ == "__main__":
             ModelCheckpoint(
                 monitor="val_loss",
                 mode="min",
-                save_top_k=3,
+                save_top_k=config['training'].get('save_top_k', 3),
                 dirpath=f"{save_dir}",
                 filename="epoch={epoch}-loss={val_loss:.4f}",
                 auto_insert_metric_name=False,
                 save_weights_only=True,
-                every_n_epochs=1,
+                # every_n_epochs=1 pins saving to the epoch boundary, which silently defeats a
+                # sub-epoch val_check_interval: you validate 12 times and keep 3 epoch-end files.
+                # None lets ModelCheckpoint save at every validation instead.
+                every_n_epochs=config['training'].get('checkpoint_every_n_epochs', 1),
             ),
             EarlyStopping(monitor="val_loss", patience=10, mode="min"),
             LearningRateMonitor(logging_interval="step"),
