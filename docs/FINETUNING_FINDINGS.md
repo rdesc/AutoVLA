@@ -74,7 +74,7 @@ used to pick a checkpoint.**
 Also note the per-step `train_loss` in the Lightning CSV is a **single micro-batch of 8
 samples** (`models/autovla.py`, `batch_size: 1` per rank, `sync_dist=True`), written every 50
 steps. It is far too noisy to read as a curve. Two AutoVLA runs correlate at r = 0.983 on it
-only because `seed_everything(42)` gives them the same shuffle, so the same hard rows land at
+only because `seed_everything(42)` gives them the same shuffle, so the same hard examples land at
 the same fraction of the epoch. HuggingFace's Trainer logs the mean over the logging interval
 at global batch 128, which is why a ReCogDrive curve looks smooth next to ours — that is a
 logging difference, not a training one.
@@ -95,7 +95,7 @@ So a **fast turn is unrepresentable**, and above 31.34 m/s nothing is. Measured 
 floor per training set (`$ROD/autovla_analysis/scripts/codebook_quantisation_error.py`, using
 the dataset's own `TrajectoryTargetBuilder`, so these are exactly the labels training saw):
 
-| set | ADE floor | FDE floor | rows >1 m FDE |
+| set | ADE floor | FDE floor | training examples >1 m FDE |
 |---|---|---|---|
 | HUGSIM teacher | 0.045 m | 0.036 m | 0.0% |
 | Alpasim teacher (`texecnr_m`) | 0.145 m | 0.205 m | 2.6% |
@@ -103,11 +103,11 @@ the dataset's own `TrajectoryTargetBuilder`, so these are exactly the labels tra
 
 The floor is flat at ~4 cm up to 15 m/s and then collapses — `bclog` averages a 3.1 m FDE
 floor above 15 m/s, worst 28 m. HUGSIM rollouts never exceed ~10 m/s so they never reach it;
-Alpasim has real highway driving and **20% of sampled `bclog` rows are in the broken regime**.
-`bclog` has 548 rows (3.14%) above the 31.34 m/s ceiling outright.
+Alpasim has real highway driving and **20% of sampled `bclog` training examples are in the broken regime**.
+`bclog` has 548 training examples (3.14%) above the 31.34 m/s ceiling outright.
 
 **Remedy if the fast regime matters:** re-cluster the codebook on the target distribution
-(`tools/action_token/action_token_cluster.py`). Filtering fast rows is a workaround — it
+(`tools/action_token/action_token_cluster.py`). Filtering fast training examples is a workaround — it
 removes degenerate labels but leaves the model unable to drive a fast curve at all.
 
 ## 5. The output format collapses — and it is a consequence of §4, not of the prompt.
@@ -131,9 +131,9 @@ speed m/s    base    bclog   texec-m  texecnr-m
 
 Base: **0 failures in 17,854 steps**, including 153 above 20 m/s. ~0.4% of eval steps are
 above 25 m/s and they carry 8 of the 24 distinct failures — a ~150× enrichment, in exactly
-the band where §4 says the codebook runs out. In the 30+ m/s bin, 74% of sampled `bclog` rows
+the band where §4 says the codebook runs out. In the 30+ m/s bin, 74% of sampled `bclog` training examples
 have **all ten label tokens identical** — a constant, image-independent target. HUGSIM: zero
-such rows.
+such examples.
 
 **Mechanism.** One epoch at lr 2e-5 with the whole LM backbone trainable
 (`train_lm_backbone: true`), on a set whose fast regime is supervised by a constant ten-token
@@ -142,10 +142,10 @@ continuation of `"The final output action is: "` in that regime. The base checkp
 loses it.
 
 **Ruled out, with counts** (`$ROD/autovla_analysis/scripts/sft_target_audit.py` rebuilds the
-exact assistant target from `dataset_utils/sft_dataset.py` for 1200 rows × 5 sets and
+exact assistant target from `dataset_utils/sft_dataset.py` for 1200 training examples × 5 sets and
 tokenises it):
 
-- *Prompt format / empty `cot_output` under `use_cot: true`.* 6000 of 6000 rows carry exactly
+- *Prompt format / empty `cot_output` under `use_cot: true`.* 6000 of 6000 training examples carry exactly
   ten action tokens. The no-CoT target is byte-identical in shape to the HUGSIM no-reason set,
   which trains fine. Each arm fails inside its own **correctly learned** template and only in
   the action slot.
@@ -155,7 +155,7 @@ tokenises it):
   the `.stats.json` sidecars record zero unmapped-command drops.
 
 **Careful with the HUGSIM control.** HUGSIM teacher data tops out at 9.65 m/s over 36,476
-rows. That HUGSIM arms completed 155/155 shows the builders and prompt plumbing are sound; it
+training examples. That HUGSIM arms completed 155/155 shows the builders and prompt plumbing are sound; it
 is **not** evidence that Alpasim data is uniquely bad, because the HUGSIM arms were never
 probed in the failing regime.
 
@@ -174,21 +174,27 @@ action-token cross-entropy is added only when `hascot[0]` is true. Any arm built
 arm has the same gap and still trains, so this is not the cause of §5 — but it leaves exactly
 the slot that breaks without its dedicated supervision, and un-gating it is free.
 
-**b. Training and inference feed different video resolutions.** `dataset_utils/sft_dataset.py`
-hardcodes `min_pixels = max_pixels = 28*28*128 = 100352` in all three prompt-construction
-branches and **ignores** the configs' `model.video.{min,max}_pixels: 109760`, which the eval
-driver does use. A real train/test mismatch, affecting both simulators equally.
+**b. `sft_dataset.py` ignored `model.video.{min,max}_pixels` — but the effect was nil.**
+It hardcoded `min_pixels = max_pixels = 28*28*128 = 100352` in all three prompt-construction
+branches while the configs said 109760 and the eval driver used 109760. The key now works
+(configs are pinned to 100352 so no published arm changes).
 
-> **Not fixed as of 2026-11-26, deliberately.** Every arm trained to date used 100352, so
-> changing it breaks comparability with every published row. Fix it together with a re-run of
-> the baseline arms, not alone.
+> **MEASURED, 2026-11-26: this changed nothing.** Building the same row at both settings yields
+> identical video frames — **420×224 = 94,080 px** either way. The 800×450 source is rounded down to
+> Qwen's 28-pixel patch grid and lands *below* both caps, so neither binds. Training and inference
+> were always at the same actual resolution. The `-px109760` arm run to test this is therefore a
+> duplicate of the batch-24 teacher arm, not a resolution experiment; its val curve matches
+> `conv3ep1` to four decimals at the first validation point.
+>
+> The lesson is worth more than the bug: **a config key that is read but never binding looks exactly
+> like a key that works.** Check what the processor actually emits, not what the config says.
 
 ## 7. `cot_loss_scale`
 
 Upstream multiplies a reasoning row's loss by 40 so that scarce CoT data is not drowned out.
-In our difficulty-gated sets ~75% of rows carry reasoning, so that factor does the opposite of
+In our difficulty-gated sets ~75% of training examples carry reasoning, so that factor does the opposite of
 its purpose: with `gradient_clip_val=1.0` clipping **by value**, every CoT step saturates the
-clip and the easy rows — the whole point of gating reasoning on difficulty — barely train.
+clip and the easy examples — the whole point of gating reasoning on difficulty — barely train.
 All our configs set `cot_loss_scale: 1.0`. Set it back to 40 only to reproduce upstream.
 
 ## 8. Practical notes
