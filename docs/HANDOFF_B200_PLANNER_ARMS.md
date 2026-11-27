@@ -113,12 +113,61 @@ result worth reporting as such.
 
 ## Data
 
+### 1. The frames (52 GB) — fetch these FIRST
+
+The SFT JSONs are decisions and labels only. Every training example references **12 camera frames**
+by ABSOLUTE PATH — 3 cameras (`CAM_FRONT`, `CAM_FRONT_LEFT`, `CAM_FRONT_RIGHT`) x 4 context steps
+0.5 s apart — and those frames are not in any of the SFT artifacts. That is why the SFT tarball is
+9.4 MB while the data it depends on is 52 GB.
+
+    Drive: "agentic driver assets/oracle_pdm_closed_hd.tar.zst"   13.4 GB  -> extracts to 20 GB
+           "agentic driver assets/oracle_future_hd.tar.zst"       21.6 GB  -> extracts to 32 GB
+
+    tar --zstd -xf oracle_pdm_closed_hd.tar.zst -C <root>
+    tar --zstd -xf oracle_future_hd.tar.zst     -C <root>
+
+A JSON references them like this:
+
+    /opt/dlami/nvme/rod/datasets/hugsim_oracle/oracle_pdm_closed_hd/<scenario>/claude_driver/cameras/0141_CAM_FRONT.jpg
+    \________________ extraction root _______________/\_________ fixed by the archive _________/
+
+**If `<root>` differs from `/opt/dlami/nvme/rod/datasets/hugsim_oracle`, symlink rather than
+rewrite.** The layout under the root is identical, so one symlink fixes every path in every set:
+
+    mkdir -p /opt/dlami/nvme/rod/datasets
+    ln -s <root> /opt/dlami/nvme/rod/datasets/hugsim_oracle
+
+Rewriting the JSONs with `sed` also works but touches ~29k files across four sets and has to be
+redone for every rebuild. Verify either way before launching — a missing frame is not a crash, the
+builder already resolved these paths and training will simply fail to open them:
+
+    python - <<'EOF'
+    import json, glob, os, random
+    d='/mnt/efs/users/rod/student_runs/sft_data/autovla_hugsim_pdmclosed_executed5s_train'
+    bad=0
+    for f in random.sample(glob.glob(d+'/*.json'), 200):
+        s=json.load(open(f))
+        for k in s:
+            if k.endswith('_camera_paths'):
+                bad += sum(not os.path.exists(p) for p in s[k])
+    print('missing frames in 200 sampled examples:', bad)   # must be 0
+    EOF
+
+On this node the frames are already extracted and the paths resolve; `$ROD/drive_staging/` also
+holds a durable copy of the PDM-Closed archive with its `.sha256`. **NVMe is EPHEMERAL** — it is
+wiped when the instance stops — so on a fresh box assume the frames are gone and start here.
+
+### 2. The SFT sets (9.4 MB)
+
     $ROD/student_runs/sft_data/autovla_hugsim_{pdmclosed,oraclefuture}_executed5s{,_train,_val}
     $ROD/student_runs/sft_data/autovla_hugsim_{pdmclosed,oraclefuture}_cotmatched_executed5s{,_train,_val}
 
-Also on Drive: `agentic driver assets/autovla_planner_sft_sets.tar.gz` (+ `.README.md`). The tarball
-holds decisions and labels, **not frames**.
+Also on Drive as `agentic driver assets/autovla_planner_sft_sets.tar.gz` (+ `.README.md`), which is
+what to use if `$ROD` is not mounted on the B200 box.
 
 Do NOT use the older `*_cot_executed5s` sets (11,451 / 9,326 examples). They were built by a builder
 that does not apply HUGSIM's per-step nc/dac check, so they contain 3,859 / 1,879 steps whose own
 plan scored a predicted collision or off-road. The `_cotmatched_` sets replace them.
+
+> Note there is a third archive on Drive, `oracle_predict_hd.tar.zst` (20.9 GB). **Not in scope** —
+> we are doing oracle-future and PDM-Closed only.
