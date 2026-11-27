@@ -103,7 +103,7 @@ same filters, same split, same eval) and let each model have an optimiser that s
 Forcing a shared optimiser attributes to architecture a gap that is partly a hyperparameter
 choice favouring the other model.
 
-## 3. One epoch is enough, and val loss does not track the closed-loop score.
+## 3. ~1,400 optimizer STEPS is enough — not "one epoch". Val loss does not track the score.
 
 `3ep-flat`: the published arm's optimiser extended to 3 epochs, LR held **flat** on purpose
 (`lr_step_frequency: 1000000`). Under a cosine, "epoch 2 beats epoch 1" would conflate more
@@ -116,7 +116,21 @@ than evidence of anything.
 | 2 | 41.8 | 0.8264 |
 | 3 | 41.1 | 0.8140 |
 
-The score moves 0.8 points with no trend while held-out loss falls 11%. `rcdmatch` makes the
+The score moves 0.8 points with no trend while held-out loss falls 11%.
+
+> **READ THIS AS STEPS, NOT EPOCHS.** That run is the 36k teacher set, where one epoch is **1,435
+> optimizer steps**. "One epoch is enough" is only true at that size. A 7.2k set at effective batch
+> 24 gives one epoch = **298 steps**, a fifth as much training, and the convergence result says
+> nothing about it.
+>
+> We made exactly this mistake: the planner arms (§8) and the 7.6k teacher controls were run at 1
+> epoch / ~300 steps on that reasoning, and are therefore probably UNDERTRAINED. Their relative
+> ordering may survive, since all four are equally short, but the absolute numbers are depressed.
+> Re-running at 5 epochs (~1,450 steps) to land on the step count where convergence was verified.
+>
+> **The rule: size the run in optimizer steps, around 1,400, and convert to epochs from the dataset
+> size.** `epochs = round(1400 * effective_batch / n_examples)`. Scale warmup to 7% of the result
+> rather than inheriting a number written for a different length. `rcdmatch` makes the
 same point from the other side: its val loss fell monotonically to 1.0437 and it scored 31.5.
 **Imitation loss on held-out teacher tokens is not the closed-loop objective and must not be
 used to pick a checkpoint.**
