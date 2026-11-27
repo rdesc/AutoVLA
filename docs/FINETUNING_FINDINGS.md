@@ -304,6 +304,12 @@ future**: its paths are correct but not *inferable* from three forward cameras, 
 trained to predict something its inputs do not determine. PDM-Closed plans from observable state,
 which is probably why it merely fails to help rather than actively hurting.
 
+Note the 7.6k teacher controls use `train_sample_size`, i.e. a RANDOM subset of the teacher set,
+not a filter-matched one. That is a weaker control than the `--only-tokens` matching now used for
+the caption arms: it equalises volume but not which decisions survive. It does not invalidate the
+comparison, since both teacher sets pass the same filters to begin with, but the asymmetry is worth
+knowing before leaning hard on a 1-2 point difference.
+
 **Most of the gap is dataset size, not demonstrator quality.** Cutting the teacher to the planners'
 7.6k costs 3.6 points (32.4 -> 28.8). Against that honest baseline PDM-Closed is only 3.3 points
 behind — close to the +-2.4 noise floor — while oracle-future is still 8.7 behind, which is real.
@@ -379,6 +385,23 @@ no-reasoning counterparts with `train_sample_size` so reasoning is the only vari
 | Claude teacher, 7.6k | 28.8 | 26.8 | -2.0 |
 | PDM-Closed, 7.6k | 25.5 | 22.0 | -3.5 |
 | oracle-future, 7.6k | 20.1 | 21.5 | +1.4 |
+
+> **CONFOUND, found 2026-11-27 — the two planner rows above are NOT yet interpretable.** The
+> no-reasoning planner sets were built by `make_oracle_sft_data.py` and the reasoning ones by
+> `make_teacher_sft_data.py`, because the caption export ships the teacher archives' file format.
+> The format matches; the FILTERS do not. The oracle builder applies HUGSIM's per-step nc/dac check
+> and a failed-end rule, the teacher builder applies neither (teacher archives arrive pre-filtered).
+> So the reasoning arms drew from a strictly larger, lower-quality pool — 1,879 extra steps for
+> oracle-future and 3,859 for PDM-Closed, every one a step whose own plan scored a predicted
+> collision or off-road. `train_sample_size` matched the example COUNT, which made the arms look
+> controlled while the pools differed, and the confound runs AGAINST the reasoning arms.
+> The teacher rows are unaffected (same builder both sides), so **the +7.3 headline stands**.
+> Fix: `--only-tokens` on the teacher builder restricts a caption build to the decisions the
+> archive build kept. Rebuilt as `*_cotmatched_*`; the two planner deltas will be re-measured.
+>
+> **The general lesson: matching two sources' FORMAT is not matching their FILTERS.** The evidence
+> was in the `.stats.json` drop reasons the whole time. Compare those before pairing sets built by
+> different builders.
 
 **Reasoning pays only on the full teacher set.** The three deltas at 7.6k are -2.0 / -3.5 / +1.4,
 all inside the noise floor, i.e. indistinguishable from zero. Narrating a trajectory post hoc does
