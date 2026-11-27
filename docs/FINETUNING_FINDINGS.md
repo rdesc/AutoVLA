@@ -48,6 +48,20 @@ count, not the schedule: one epoch at batch 128 is **269 optimizer steps** where
 gives **1,435**, and the cosine spends the last third of those few steps at almost no
 learning rate. ReCogDrive tolerates 316 steps; AutoVLA evidently needs the updates.
 
+**The penalty is a cliff, not a slope — it already bites at batch 32.** Measured 2026-11-27 on the
+same data and the same 8 GPUs, varying only `accumulate_grad_batches`:
+
+| arm | accumulate | eff. batch | steps | All* |
+|---|---|---|---|---|
+| `teacher-8gpu` | 3 | 24 | 1,435 | **39.7** |
+| `teacher-b32` | 4 | **32** | 1,139 | **32.4** |
+| `rcdmatch` | 16 | 128 | 269 | 31.5 |
+
+Going 24 -> 32 costs **7.3 points**, three times the noise floor and essentially the whole penalty
+you get at 128. So **pin `accumulate_grad_batches` so that GPUs x batch_size x accumulate == 24**,
+and never inherit the number from a config written for a different GPU count: the published arms
+used 4 on SIX GPUs, which is 24, but the same file on eight gives 32 and loses 7 points silently.
+
 Consequence for experiment design: hold the **data** constant across students (same rollouts,
 same filters, same split, same eval) and let each model have an optimiser that suits it.
 Forcing a shared optimiser attributes to architecture a gap that is partly a hyperparameter
@@ -232,7 +246,79 @@ Note the power limit before reading any result: 9.9% is modest, and the run-to-r
 the Alpasim scene score has never been measured (the ±2.4 in §1 is HUGSIM `All*`). A move of ~0.02
 would not be distinguishable from noise.
 
-## 8. `cot_loss_scale`
+## 8. Distilling a PLANNER instead of the Claude teacher (2026-11-26/27)
+
+HUGSIM's own planners as demonstrators, same simulator, same prompt, same executed-path target,
+same recipe — only *who produced the trajectory* changes. Both planner sets are direct-decision
+(a planner emits a trajectory, not language); captions were added separately, see the 2x2 below.
+
+| arm | demonstrator completed | training examples | scenarios | All* |
+|---|---|---|---|---|
+| base `AutoVLA_PDMS_89` | — | — | — | 24.8 |
+| + PDM-Closed | **129 / 265 runs** | 7,607 | 193 / 265 | **25.5** |
+| + oracle-future | 371 / 436 runs | 7,461 | 252 / 265 | **20.1** |
+| + Claude teacher, no reasoning | rewound until solved | 35,595 | 189 / 265 | 32.4 |
+| + Claude teacher, no reasoning, **subsampled to 7.6k** | | 7,607 | 200 / 265 | **28.8** |
+
+**Neither planner helps, and the better planner is worse.** Oracle-future completes 85% of its runs
+against PDM-Closed's 49% and covers the most scenarios of ANY arm (252/265, more than the teacher's
+200) — and scores 5 points lower, below base. Breadth of demonstration is therefore not what
+matters. The leading explanation is that oracle-future plans with **privileged knowledge of the
+future**: its paths are correct but not *inferable* from three forward cameras, so the student is
+trained to predict something its inputs do not determine. PDM-Closed plans from observable state,
+which is probably why it merely fails to help rather than actively hurting.
+
+**Most of the gap is dataset size, not demonstrator quality.** Cutting the teacher to the planners'
+7.6k costs 3.6 points (32.4 -> 28.8). Against that honest baseline PDM-Closed is only 3.3 points
+behind — close to the +-2.4 noise floor — while oracle-future is still 8.7 behind, which is real.
+
+### Why the planner sets are only ~7.5k examples
+
+Not a filtering mistake; three things stack, and the horizon dominates.
+
+    archive:          420 rollouts, 22,295 steps   (~53 steps = ~13 s each)
+      dev half only:  265 rollouts    <- the other 155 are the eval set and must stay held out
+      of those steps:
+        -4,547   fewer than 5.0 s of future   <- ~32%, the dominant cost
+        -1,944   the step's own plan scored nc == 0 or dac == 0
+          -683   the 5 s future reaches a failed end of the run
+      kept:     7,461 / 252 scenarios
+
+AutoVLA always answers **10 poses at 0.5 s**, so a usable example needs 20 further steps. At ~53
+steps per rollout the last 20 of EVERY rollout are structurally unusable. ReCogDrive's 8-pose/4 s
+label needs only 16, so its version of this set comes out meaningfully larger — do not compare the
+two students' example counts without accounting for that.
+
+The second asymmetry is draws per scenario: the teacher set is **569 rollouts** (three draws plus
+rewind passes) against the planners' **265** (seed 0 only). Re-running seeds does not help a
+deterministic planner — the runs README records PDM-Closed seeds 1-2 as identical copies.
+
+### Reasoning x demonstrator, the 2x2
+
+Post-hoc Claude captions over the same planner rollouts (`adam-nov25-planner-captions`,
+`steps[].reason`), difficulty-gated exactly as the teacher arm is, and size-matched to their
+no-reasoning counterparts with `train_sample_size` so reasoning is the only variable.
+
+| demonstrator | no reasoning | + reasoning | delta |
+|---|---|---|---|
+| Claude teacher, 36k | 32.4 | **39.7** | **+7.3** |
+| Claude teacher, 7.6k | 28.8 | 26.8 | -2.0 |
+| PDM-Closed, 7.6k | 25.5 | 22.0 | -3.5 |
+| oracle-future, 7.6k | 20.1 | 21.5 | +1.4 |
+
+**Reasoning pays only on the full teacher set.** The three deltas at 7.6k are -2.0 / -3.5 / +1.4,
+all inside the noise floor, i.e. indistinguishable from zero. Narrating a trajectory post hoc does
+not transfer; the +7.3 needs both the reasoning and 36k examples of it. This is the cleanest
+evidence we have that the teacher's advantage is in its TRAJECTORIES — recoverable paths a
+camera-only student can infer — and not in the text attached to them.
+
+### Matched-optimiser planner arms
+
+`pdmclosed-rcd` 23.0 and `oraclefuture-rcd` 22.7, against 25.5 and 20.1 at batch 24. As expected
+from §2: one epoch at batch 128 on a 7.5k set is only **55 optimizer steps**, too few to move off
+base (24.8). Reportable as a matched column; little signal in it.
+
+## 9. `cot_loss_scale`
 
 Upstream multiplies a reasoning row's loss by 40 so that scarce CoT data is not drowned out.
 In our difficulty-gated sets ~75% of training examples carry reasoning, so that factor does the opposite of
@@ -240,7 +326,7 @@ its purpose: with `gradient_clip_val=1.0` clipping **by value**, every CoT step 
 clip and the easy examples — the whole point of gating reasoning on difficulty — barely train.
 All our configs set `cot_loss_scale: 1.0`. Set it back to 40 only to reproduce upstream.
 
-## 9. Practical notes
+## 10. Practical notes
 
 - `scripts/run_autovla_hugsim.sh` runs the **sweep only — it does not score**. Scoring is
   `simulators/hugsim_garage/score_realized.py` then `scripts/mila/paper_table_row.py`. A chain
