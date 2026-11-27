@@ -329,6 +329,44 @@ The second asymmetry is draws per scenario: the teacher set is **569 rollouts** 
 rewind passes) against the planners' **265** (seed 0 only). Re-running seeds does not help a
 deterministic planner — the runs README records PDM-Closed seeds 1-2 as identical copies.
 
+### The two planner arms fail for OPPOSITE reasons
+
+Measured from each archive's `infos.pkl` and `summary.csv`:
+
+| | PDM-Closed | oracle-future |
+|---|---|---|
+| planner's own `cl_hdscore` | 55.4 | **86.9** |
+| mean ego speed | **4.48 m/s** | 7.16 m/s |
+| distance driven per rollout | 64.1 m | **97.1 m** |
+| steps mean / median | **63** / 52 | 53 / 52 |
+| steps p90 / max | **115 / 308** | 76 / 133 |
+| stalled runs | **52** | 11 |
+| steps read -> kept | 16,562 -> 7,607 (46%) | 14,635 -> 7,461 (51%) |
+| dropped: future reaches a failed end | **28%** | 5% |
+| dropped: fewer than 5 s of future | 15% | **31%** |
+
+**Why the two sets are the same size despite very different planners.** PDM-Closed drives ~60%
+slower and covers two-thirds the distance, yet generates MORE steps: the medians are identical at
+52 and the difference is all tail (p90 115 vs 76, max 308 vs 133), which is 52 stalled runs
+crawling to the step cap. Slow or stuck driving means the rollout does not end. Those extra steps
+are the least useful ones and the filters remove 28% of them as within 5 s of a failure. Oracle-
+future finishes its routes, so its rollouts are short and clean — only 5% lost to failed ends, but
+31% lost to the horizon rule, because short rollouts are hit hardest by needing 20 further steps.
+"More raw material, heavily filtered" lands in the same place as "less raw material, lightly
+filtered". It is a coincidence, not a property of the sources.
+
+**The surviving data is biased differently in each case, and the students show it.**
+
+  - PDM-Closed: even after the failures are filtered out, what remains is a demonstrator averaging
+    4.48 m/s. The student inherits the timidity — `COM` 60.9 against the teacher arm's 97.7, `Easy`
+    76.3 against 88.3. It is not crashing more; it is **under-driving**, which is what it was shown.
+  - oracle-future: the demonstrations are fast, clean and from an 86.9-scoring planner — and the
+    student still lands below base. That is the strongest form of the privileged-information
+    argument: the paths are excellent and simply **not inferable from three forward cameras**, so
+    fitting them costs the model competence it already had.
+
+Two different failure modes, both landing near or below base. Neither is a filtering mistake.
+
 ### Reasoning x demonstrator, the 2x2
 
 Post-hoc Claude captions over the same planner rollouts (`adam-nov25-planner-captions`,
