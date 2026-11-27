@@ -28,6 +28,42 @@ of a single run. At n=1 on 155 scenarios, differences under ~2.5 points are not
 distinguishable from noise. Per-difficulty columns are worse — `Hard` swings 16.4 / 9.4 / 13.3
 across one run's own epochs, because it is 39 scenarios.
 
+## 1b. The recipe that works — copy this
+
+The best AutoVLA arm to date: **All\* 39.7** (`teacher-8gpu`; the same recipe scored 38.6 and 41.0
+on other runs, mean 39.8 over three samples). Config
+`config/training/qwen2.5-vl-3B-hugsim-teacher-8gpu.yaml`.
+
+| | value | why it is this |
+|---|---|---|
+| `batch_size` | 1 | per rank; the real knob is the product below |
+| `accumulate_grad_batches` | **3** | **8 GPUs x 1 x 3 = effective batch 24.** Set this so the product is 24 on whatever GPU count you have. See §2: 32 costs 7.3 points. |
+| `learning_rate` | **2e-5** | |
+| `epochs` | **1** | more does not help; see §3 |
+| `lr_warmup_step` | 100 | ~7% of the 1,435-step run. Scale it to 7% for a shorter run, do not keep 100 |
+| LR schedule | **flat after warmup** | `lr_step_frequency: 2000` never fires in 1,435 steps, so `gamma ** 0 == 1`. Do NOT read these runs as "decayed" |
+| `lr_step_gamma` | 0.98 | unused at this run length |
+| `weight_decay` | 0.01 | |
+| `cot_loss_scale` | **1.0** | upstream's 40 is wrong here; see §9 |
+| `train_sample_size` | null | all examples |
+| `num_workers` | 4 | |
+| `val_check_interval` | 0.25 | 4 val points per epoch |
+| `save_top_k` / `checkpoint_every_n_epochs` | -1 / null | keep every checkpoint; the stock `every_n_epochs=1` defeats a sub-epoch interval |
+| `model.use_cot` | true | true even for no-reasoning arms — the system prompt stays identical, only `cot_output` is empty |
+| `model.init_from_checkpoint` | `AutoVLA_PDMS_89.ckpt` | a fine-tune OF AutoVLA, not a retrain from base Qwen |
+| `model.train_vision_backbone` | **false** | vision encoder frozen |
+| `model.train_lm_backbone` | true | |
+| `model.trajectory` | 10 poses, 0.5 s, 5 s horizon | fixed by the codebook |
+| `model.video.{min,max}_pixels` | 100352 | inert in practice — see §6b |
+| `model.tokens.action_start_id` | 151665 | |
+| trainer | FSDP `FULL_SHARD`, bf16, `gradient_clip_val 1.0` by **value**, `seed_everything(42)` | clip-by-value is why `cot_loss_scale` 40 would saturate every CoT step |
+| inference | `temperature 0.01`, `max_length 2048` | `max_length` is a TOTAL budget shared with the video prompt |
+
+Data: `$ROD/student_runs/sft_data/autovla_hugsim_final-rewind_executed5s_{train,val}` — 36,476
+examples over 200 of the 265 dev scenarios, split **by scenario** (a row split shares frames across
+the halves). Runtime: ~83 min training on 8xA100, plus ~56 min to evaluate on the HUGSIM 155 with
+16 workers (a no-reasoning arm evaluates in ~20).
+
 ## 2. ReCogDrive's optimiser makes AutoVLA worse. Do not "match for consistency".
 
 Matching a comparison model's hyperparameters sounds fair and is not. We ran it:
