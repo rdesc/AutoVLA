@@ -423,6 +423,37 @@ not transfer; the +7.3 needs both the reasoning and 36k examples of it. This is 
 evidence we have that the teacher's advantage is in its TRAJECTORIES — recoverable paths a
 camera-only student can infer — and not in the text attached to them.
 
+### Re-run at 5 epochs — the 1-epoch arms WERE undertrained
+
+Confirming the §3 correction with data. Same data, same recipe, same 8 GPUs; only the step count
+changes.
+
+| arm | epochs | steps | All* |
+|---|---|---|---|
+| base `AutoVLA_PDMS_89` | — | — | 24.8 |
+| oracle-future | 1 | 286 | 20.1 |
+| **oracle-future** | **5** | **1,430** | **24.5** |
+| oracle-future + reasoning | 5 | 1,425 | *running* |
+| PDM-Closed | 1 | 298 | 25.5 |
+| PDM-Closed | 5 | 1,490 | *queued, B200* |
+
+**+4.4 points from training longer**, clear of the ±2.4 floor. So "1 epoch is enough" was costing
+real points on these small sets, exactly as §3 now warns. `Hard` moved 14.2 -> 20.6 and `R_c`
+34.6 -> 39.4, so the extra steps did teach it something.
+
+**But it lands at 24.5 against base's 24.8 — exactly base level.** That makes the conclusion
+STRONGER, not weaker: oracle-future distillation is not "undertrained and might work", it is
+trained to the step count where convergence was verified and buys nothing. The
+privileged-information reading survives the better-trained test.
+
+Full row:
+
+    autovla_ft_oraclefuture_5ep & NAVSIM & 88.9 & 98.4 & 81.7 & 51.0 & 39.4 & 68.7 & 22.4 & 20.6 & 29.0 & 36.1 & 10.2 & 27.4 & 24.5
+
+NOTE the 1-epoch rows elsewhere in this section (PDM-Closed 25.5, oracle-future 20.1, and the 7.6k
+teacher controls at 26.8 / 28.8) are all ~300-step runs and are depressed for the same reason.
+Treat them as a floor. The 36k teacher arms are unaffected -- one epoch there is 1,435 steps.
+
 ### Matched-optimiser planner arms
 
 `pdmclosed-rcd` 23.0 and `oraclefuture-rcd` 22.7, against 25.5 and 20.1 at batch 24. As expected
