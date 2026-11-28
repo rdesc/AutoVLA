@@ -1,26 +1,39 @@
-# Handoff: the four planner arms on B200
+# Handoff: the PDM-Closed planner pair on B200
 
-Train and evaluate AutoVLA on HUGSIM's PDM-Closed and oracle-future planner rollouts, with and
-without reasoning, at **5 epochs**. Written 2026-11-27 for a run on B200 hardware.
+Train and evaluate AutoVLA on HUGSIM's **PDM-Closed** planner rollouts, with and without
+reasoning, at **5 epochs**. Written 2026-11-27, updated 2026-11-28.
+
+> **STATUS 2026-11-28: the B200 run is COMPLETE** — see "Results from the B200 run" at the end of
+> this file. Nothing here needs running again. The sections above are kept as the record of what was
+> asked for and why.
+>
+> **SCOPE was the PDM-Closed pair only.** The oracle-future pair ran on the A100 and
+> must NOT be repeated here. Each PAIR has to be trained on ONE machine, because rank count changes
+> the shuffle sharding and that is a contributor to the +-2.4 noise floor (§1) — fine between pairs,
+> fatal within one. Splitting the work pair-wise is the point of this handoff.
 
 Read `FINETUNING_FINDINGS.md` §1, §3 and §8 first — they are short and they are what makes the
 numbers below interpretable.
 
 ---
 
-## The four arms
+## Your two arms
 
 | config (`config/training/qwen2.5-vl-3B-hugsim-<name>.yaml`) | data | reasoning | steps |
 |---|---|---|---|
 | `pdmclosed-5ep` | PDM-Closed, 7,158 train | no | 1,490 |
 | `pdmclosed-cotmatched-5ep` | same decisions + captions, 7,155 | **yes** | 1,490 |
-| `oraclefuture-5ep` | oracle-future, 6,866 train | no | 1,430 |
-| `oraclefuture-cotmatched-5ep` | same decisions + captions, 6,852 | **yes** | 1,425 |
 
-They form two pairs. Within a pair the ONLY difference that reaches the model is whether
-`cot_output` is populated — same decisions, same scenarios, same splits, same hyperparameters.
-Run all four so each pair is trained under identical conditions; do not pair a new arm against a
-previously-trained one.
+The ONLY difference that reaches the model is whether `cot_output` is populated — same decisions,
+same scenarios, same splits, same hyperparameters. Run BOTH on the same machine; do not pair one
+against a previously-trained arm.
+
+Running elsewhere, for reference, do not duplicate:
+
+| arm | machine | All* |
+|---|---|---|
+| `oraclefuture-5ep` | A100 | **24.5** (done) |
+| `oraclefuture-cotmatched-5ep` | A100 | evaluating at the time of writing |
 
 ## ⚠️ The one setting you must change for B200
 
@@ -62,7 +75,7 @@ If you change the dataset size, size the run in steps:
 ## Running it
 
     cd /mnt/efs/users/rod/repos/AutoVLA
-    ARMS="pdmclosed-5ep pdmclosed-cotmatched-5ep oraclefuture-5ep oraclefuture-cotmatched-5ep" \
+    ARMS="pdmclosed-5ep pdmclosed-cotmatched-5ep" \
       bash /mnt/efs/users/rod/autovla_analysis/scripts/hugsim_arm_chain.sh
 
 That chain trains each arm, evaluates the last checkpoint on the HUGSIM 155, scores it, and fails
@@ -70,7 +83,11 @@ loudly on an empty table row. To run a single arm: `ARMS="pdmclosed-5ep" bash ..
 
 On 8xA100, 1 epoch of ~7.2k took ~17 min, so expect **~85 min per arm** at 5 epochs, plus eval:
 ~20 min for a no-reasoning arm, **~56 min for a reasoning arm** (CoT generation dominates), plus
-~12 min scoring. Roughly **7-8 h for all four** on A100; B200 should be faster.
+~12 min scoring.
+
+Measured on A100 for the oracle-future pair, which is the same size: no-reasoning arm **75 min**
+train + 23 min eval; reasoning arm **75 min** train + ~56 min eval. So budget **~4 h for the pair**
+on A100-class hardware; B200 should be faster.
 
 ## Traps that have already cost us time
 
@@ -121,10 +138,10 @@ by ABSOLUTE PATH — 3 cameras (`CAM_FRONT`, `CAM_FRONT_LEFT`, `CAM_FRONT_RIGHT`
 9.4 MB while the data it depends on is 52 GB.
 
     Drive: "agentic driver assets/oracle_pdm_closed_hd.tar.zst"   13.4 GB  -> extracts to 20 GB
-           "agentic driver assets/oracle_future_hd.tar.zst"       21.6 GB  -> extracts to 32 GB
-
     tar --zstd -xf oracle_pdm_closed_hd.tar.zst -C <root>
-    tar --zstd -xf oracle_future_hd.tar.zst     -C <root>
+
+(For this handoff's scope you need PDM-Closed ONLY. `oracle_future_hd.tar.zst`, 21.6 GB, is the
+other pair's data and is already extracted on the A100 — do not download it here.)
 
 A JSON references them like this:
 
@@ -171,3 +188,99 @@ plan scored a predicted collision or off-road. The `_cotmatched_` sets replace t
 
 > Note there is a third archive on Drive, `oracle_predict_hd.tar.zst` (20.9 GB). **Not in scope** —
 > we are doing oracle-future and PDM-Closed only.
+
+---
+
+## Results from the B200 run (2026-11-28) — reply to this handoff
+
+The B200 trained the **PDM-Closed pair** and evaluated it on the HUGSIM held-out 155 itself. The A100
+took the **oracle-future pair** (`oraclefuture-5ep` = 24.5 is already in `FINETUNING_FINDINGS.md`;
+`oraclefuture-cotmatched-5ep` was evaluating on the A100 at the time of writing). Each pair therefore
+stayed on one machine, as required above.
+
+### Is a B200 HUGSIM number comparable with the A100 tables? Yes, within noise.
+
+Same base checkpoint, same 155, same scoring scripts:
+
+| base `AutoVLA_PDMS_89` | All* |
+|---|---|
+| A100 (the 24.8 used everywhere) | 24.8 |
+| B200 | 26.2 |
+
++1.4, inside the ±2.4 floor. Before that, the B200 setup was checked against the A100 at every level:
+training loss at steps 49/99/149 of a seed-42 repro matched the published run to 0.1–0.5%; the
+published checkpoint's val loss recomputed on B200 was 0.91780 against 0.91729 over the same 2,029 rows;
+HUGSIM's rendered frames match to <1 grey level. The B200 eval env is documented in
+`student-driver/docs/HUGSIM_EVAL_B200.md`.
+
+### PDM-Closed pair, 5 epochs, both checkpoints evaluated (B200)
+
+| arm | ckpt | steps | All* | scored |
+|---|---|---|---|---|
+| PDM-Closed | end of epoch 1 | 297 | 21.8 | 155/155 |
+| **PDM-Closed** | **end of epoch 5** | **1,493** | **23.2** | 155/155 |
+| PDM-Closed + reasoning | end of epoch 1 | 297 | 22.5 | **143**/155 |
+| **PDM-Closed + reasoning** | **end of epoch 5** | **1,493** | **26.1** | 154/155 |
+| base (B200) | — | — | 26.2 | 155/155 |
+
+Full rows (`NC DAC TTC COM R_c | Easy Med Hard Ext | PandaSet KITTI-360 Waymo | All*`):
+
+    autovla_base_b200                            & 93.2 & 98.8 & 88.2 & 78.7 & 34.2 & 77.6 & 29.9 & 13.9 & 19.2 & 33.0 & 18.5 & 27.3 & 26.2
+    autovla_ft_pdmclosed_5ep_ep1_b200            & 91.3 & 98.1 & 84.8 & 64.9 & 34.0 & 67.2 & 22.5 & 13.7 & 25.2 & 32.5 & 14.3 & 18.5 & 21.8
+    autovla_ft_pdmclosed_5ep_b200                & 90.5 & 98.3 & 83.3 & 61.0 & 36.2 & 73.5 & 18.2 & 14.1 & 29.9 & 33.6 & 13.5 & 22.5 & 23.2
+    autovla_ft_pdmclosed_cotmatched_5ep_ep1_b200 & 92.0 & 98.6 & 86.4 & 67.2 & 33.9 & 72.1 & 24.9 & 15.3 & 20.7 & 32.7 & 16.0 & 18.9 & 22.5
+    autovla_ft_pdmclosed_cotmatched_5ep_b200     & 92.0 & 98.2 & 86.0 & 65.0 & 37.4 & 73.5 & 24.7 & 16.4 & 29.4 & 35.2 & 15.1 & 28.1 & 26.1
+
+What they say:
+
+1. **5 epochs does not hurt; for the reasoning arm it is needed.** Without reasoning, epoch 1 → 5 is
+   21.8 → 23.2 (noise). With reasoning, 22.5 → 26.1, and the epoch-1 checkpoint *crashed* on 12 of
+   155 scenarios against 1 at epoch 5. Every crash is the same failure: the model opens
+   `<think> This is a complex scenario requiring additional reasoning…` and runs out of tokens before
+   emitting any action tokens (`ValueError: AutoVLA emitted no action tokens`). At ~300 steps it has
+   not yet learned to finish its reasoning and act. Because crashed scenarios are excluded, the
+   epoch-1 reasoning 22.5 flatters it. This agrees with the oracle-future 20.1 → 24.5.
+2. **Reasoning vs no reasoning at 5 epochs: +2.9** (26.1 vs 23.2). Just over the ±2.4 floor —
+   suggestive, not conclusive. The 1-epoch PDM-Closed delta in `FINETUNING_FINDINGS.md` was −3.5
+   (25.5 → 22.0, A100), but on the older unmatched caption sets, so it is not this pair at 1 epoch.
+3. **Neither PDM-Closed arm beats base.** 26.1 vs 26.2 on the same machine. Same conclusion as
+   oracle-future (24.5 vs 24.8 on the A100): planner-label distillation buys nothing over base.
+4. Do not set the B200's 23.2 against the A100's 1-epoch PDM-Closed 25.5 as an effect: different
+   machine and different run, within noise of each other, and of base.
+
+### Training (B200, 8 GPUs, effective batch 24 verified)
+
+`accumulate_grad_batches: 3` from the configs; epoch 1 ended at step 297 = 7,158 / 24. Val loss every
+half epoch (it flattens from epoch 3.5, with no rise):
+
+| arm | 0.5 | 1 | 1.5 | 2 | 2.5 | 3 | 3.5 | 4 | 4.5 | 5 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| pdmclosed-5ep | .811 | .635 | .570 | .516 | .495 | .462 | .458 | .441 | .450 | .448 |
+| pdmclosed-cotmatched-5ep | 1.422 | 1.001 | .881 | .797 | .756 | .718 | .715 | .695 | .701 | .694 |
+
+Speed: ~1.6 s per optimizer step on free B200s (about 2× the A100, ~40 min per arm); ~11–12 s while
+another user's jobs shared every GPU.
+
+### Checkpoints
+
+    pdmclosed-5ep             runs/sft/2026-11-27_23-35-47/epoch=4-loss=0.4478.ckpt   (epoch-1: epoch=0-loss=0.6346.ckpt)
+    pdmclosed-cotmatched-5ep  runs/sft/2026-11-28_02-19-58/epoch=4-loss=0.6942.ckpt   (epoch-1: epoch=0-loss=1.0009.ckpt)
+
+B200 episodes and table rows: `$ROD/student_runs_b200/hugsim_eval/official436/` (`_meta_<tag>/table_row.txt`,
+`realized_<tag>.json`). They are NOT in `hugsim_garage_runs/`, so the A100's tables don't see them. To
+put the PDM-Closed pair on the A100 as well, so all four arms come from one machine:
+
+    EVAL_CKPT=$AV/runs/sft/2026-11-27_23-35-47/epoch=4-loss=0.4478.ckpt ARMS=pdmclosed-5ep \
+      bash $ROD/autovla_analysis/scripts/hugsim_arm_chain.sh
+    EVAL_CKPT=$AV/runs/sft/2026-11-28_02-19-58/epoch=4-loss=0.6942.ckpt ARMS=pdmclosed-cotmatched-5ep \
+      bash $ROD/autovla_analysis/scripts/hugsim_arm_chain.sh
+
+### ⚠️ A new trap: `runs/sft/` is shared between the two nodes
+
+Both machines write AutoVLA runs to the same EFS `runs/sft/`. `hugsim_arm_chain.sh` takes "the newest
+run dir" (by mtime) as the arm it just trained, so while the other node is training it can pick the
+other node's run and evaluate the wrong model under this arm's name. Tonight the A100 got the right dir
+both times only by timing (checked by dir mtimes). The B200 copy of the chain,
+`student-driver/scripts/b200/hugsim_arm_chain.sh`, instead takes the newest dir *created after the arm
+started* (dir names are creation timestamps) whose `hparams.yaml` contains this arm's train
+`json_dataset_path`. Port that before running both nodes at once again.
