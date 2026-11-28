@@ -123,7 +123,7 @@ The score moves 0.8 points with no trend while held-out loss falls 11%.
 > 24 gives one epoch = **298 steps**, a fifth as much training, and the convergence result says
 > nothing about it.
 >
-> We made exactly this mistake: the planner arms (§8) and the 7.6k teacher controls were run at 1
+> We made exactly this mistake: the planner arms (§8) were run at 1
 > epoch / ~300 steps on that reasoning, and are therefore probably UNDERTRAINED. Their relative
 > ordering may survive, since all four are equally short, but the absolute numbers are depressed.
 > Re-running at 5 epochs (~1,450 steps) to land on the step count where convergence was verified.
@@ -308,7 +308,6 @@ same recipe — only *who produced the trajectory* changes. Both planner sets ar
 | + PDM-Closed | **129 / 265 runs** | 7,607 | 193 / 265 | **25.5** |
 | + oracle-future | 371 / 436 runs | 7,461 | 252 / 265 | **20.1** |
 | + Claude teacher, no reasoning | rewound until solved | 35,595 | 189 / 265 | 32.4 |
-| + Claude teacher, no reasoning, **subsampled to 7.6k** | | 7,607 | 200 / 265 | **28.8** |
 
 **Neither planner helps, and the better planner is worse.** Oracle-future completes 85% of its runs
 against PDM-Closed's 49% and covers the most scenarios of ANY arm (252/265, more than the teacher's
@@ -318,15 +317,15 @@ future**: its paths are correct but not *inferable* from three forward cameras, 
 trained to predict something its inputs do not determine. PDM-Closed plans from observable state,
 which is probably why it merely fails to help rather than actively hurting.
 
-Note the 7.6k teacher controls use `train_sample_size`, i.e. a RANDOM subset of the teacher set,
-not a filter-matched one. That is a weaker control than the `--only-tokens` matching now used for
-the caption arms: it equalises volume but not which decisions survive. It does not invalidate the
-comparison, since both teacher sets pass the same filters to begin with, but the asymmetry is worth
-knowing before leaning hard on a 1-2 point difference.
-
-**Most of the gap is dataset size, not demonstrator quality.** Cutting the teacher to the planners'
-7.6k costs 3.6 points (32.4 -> 28.8). Against that honest baseline PDM-Closed is only 3.3 points
-behind — close to the +-2.4 noise floor — while oracle-future is still 8.7 behind, which is real.
+> **The 7.6k teacher controls (`teacher-7k`, `teacher-noreason-7k`) are DROPPED from the
+> comparison** (decision 2026-11-28) and are not re-run. They subsampled the teacher set with
+> `train_sample_size` — a random subset, not a filter-matched one — and were themselves run at 1
+> epoch / ~317 steps, so they were undertrained in the same way §3 describes AND their reasoning
+> arm's score was inflated by excluded crashes. Any claim resting on them is withdrawn, including
+> the earlier "most of the gap is dataset size, not demonstrator quality".
+>
+> The 5-epoch results below make that claim unnecessary anyway: **at convergence neither planner
+> beats base**, so there is no gap left that needs explaining by dataset size.
 
 ### Why the planner sets are only ~7.5k examples
 
@@ -396,9 +395,8 @@ no-reasoning counterparts with `train_sample_size` so reasoning is the only vari
 | demonstrator | no reasoning | + reasoning | delta |
 |---|---|---|---|
 | Claude teacher, 36k | 32.4 | **39.7** | **+7.3** |
-| Claude teacher, 7.6k | 28.8 | 26.8 | -2.0 |
-| PDM-Closed, 7.6k | 25.5 | 22.0 | -3.5 |
-| oracle-future, 7.6k | 20.1 | 21.5 | +1.4 |
+| PDM-Closed (7,607) | 25.5 | 22.0 | -3.5 |
+| oracle-future (7,461) | 20.1 | 21.5 | +1.4 |
 
 > **CONFOUND, found 2026-11-27 — the two planner rows above are NOT yet interpretable.** The
 > no-reasoning planner sets were built by `make_oracle_sft_data.py` and the reasoning ones by
@@ -417,8 +415,10 @@ no-reasoning counterparts with `train_sample_size` so reasoning is the only vari
 > was in the `.stats.json` drop reasons the whole time. Compare those before pairing sets built by
 > different builders.
 
-**Reasoning pays only on the full teacher set.** The three deltas at 7.6k are -2.0 / -3.5 / +1.4,
-all inside the noise floor, i.e. indistinguishable from zero. Narrating a trajectory post hoc does
+**Reasoning pays only on the full teacher set.** The two 1-epoch planner deltas are -3.5 and +1.4,
+inside the noise floor and in any case measured on ~300-step runs whose reasoning arms lose
+scenarios to crashes (§5), so they are not evidence of anything. The 5-epoch re-runs below replace
+them. Narrating a trajectory post hoc does
 not transfer; the +7.3 needs both the reasoning and 36k examples of it. This is the cleanest
 evidence we have that the teacher's advantage is in its TRAJECTORIES — recoverable paths a
 camera-only student can infer — and not in the text attached to them.
@@ -450,8 +450,8 @@ Full row:
 
     autovla_ft_oraclefuture_5ep & NAVSIM & 88.9 & 98.4 & 81.7 & 51.0 & 39.4 & 68.7 & 22.4 & 20.6 & 29.0 & 36.1 & 10.2 & 27.4 & 24.5
 
-NOTE the 1-epoch rows elsewhere in this section (PDM-Closed 25.5, oracle-future 20.1, and the 7.6k
-teacher controls at 26.8 / 28.8) are all ~300-step runs and are depressed for the same reason.
+NOTE the 1-epoch rows elsewhere in this section (PDM-Closed 25.5, oracle-future 20.1) are ~300-step
+runs and are depressed for the same reason.
 Treat them as a floor. The 36k teacher arms are unaffected -- one epoch there is 1,435 steps.
 
 ### Matched-optimiser planner arms
